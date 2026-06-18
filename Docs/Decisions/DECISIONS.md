@@ -26,6 +26,7 @@
 | ADR-009 | Why hybrid search via tsvector + pgvector (in-database) | Accepted |
 | ADR-010 | Why Flan-T5-large as the local fallback model | Accepted |
 | ADR-011 | Why React + TypeScript + Vite (supersedes ADR-006) | Accepted |
+| ADR-012 | Multi-Model AI Strategy (refines ADR-007) | Accepted |
 
 ---
 
@@ -589,7 +590,99 @@ ADR-006 is preserved with its original reasoning intact. **Append-only ADR disci
 
 ---
 
+## ADR-012: Multi-Model AI Strategy
 
+**Status:** Accepted  ·  **Date:** 2026-06-19  ·  **Decider:** Jayachandran  ·  **Mentor consulted:** Siva
+**Refines:** ADR-007 (Why OpenAI as primary LLM) — pins specific model versions and adds the embedding-model tier explicitly
+**Related:** ADR-010 (Flan-T5 local fallback, unchanged); `ARCHITECTURE_REVIEW.md` §10 ADR-003 (production embedding model — `bge-base-en-v1.5` retained as production fallback path)
+
+### Context
+ADR-007 fixed the LLM provider (OpenAI) and the *shape* of model tiering (heavy reasoning / low-latency / local fallback) but stopped short of pinning specific model versions, and did not address the embedding model choice explicitly. With the OpenAI ecosystem now coherent across both generation and embedding, we want a *single* model-strategy record that names exact versions for the MVP, defines the production upgrade path, and makes the three-way trade-off (accuracy / cost / latency) explicit and defensible.
+
+### Decision Drivers
+- **Accuracy** — must clear the DeepEval thresholds defined in `tests/eval/` and Recall@5 ≥ 0.85 on the ground-truth set.
+- **Cost** — bounded $ per session; tier router caps spend per agent run.
+- **Latency** — P95 < 4 s for RAG, P95 < 8 s for multi-agent.
+- **Single-provider coherence** — one SDK surface, one rate-limit pool, one billing line.
+- **Reversibility** — embedding-dimension changes are invasive (schema + index rebuild); we lock the MVP dim now and document the upgrade path.
+
+### Considered Options
+
+**Generation models**
+
+| Model | Strength | Weakness | Verdict |
+|---|---|---|---|
+| **GPT-5.4** | Best reasoning; structured outputs; mature tool-calling | Highest cost per token; higher latency | **Chosen — Tier 1** |
+| **GPT-5.4-mini** | ~10× cheaper than 5.4; sub-second on short prompts | Materially weaker on multi-step reasoning | **Chosen — Tier 2** |
+| GPT-4o / 4o-mini | Familiar; well-understood limits | Superseded by the 5.4 family on the same SDK | Replaced |
+| Anthropic Claude (Sonnet / Haiku) | Equally defensible technical merit | Adds a second provider surface | Rejected — single-provider coherence |
+| Flan-T5-large (local) | Free, offline, no rate limits | Substantially weaker on instruction following | **Retained — Tier 3** (per ADR-010, unchanged) |
+
+**Embedding models**
+
+| Model | Dim | Relative cost | Recall@5 (our eval set) | Verdict |
+|---|---|---|---|---|
+| **text-embedding-3-small** | 1536 | 1× | Clears 0.85 target | **Chosen — MVP (E1)** |
+| **text-embedding-3-large** | 3072 | ~6.5× | ~5% better top-5 retrieval | **Chosen — production target (E2)** |
+| bge-base-en-v1.5 (self-hosted) | 768 | $0 API / GPU $ infra | Competitive on short text | Retained as **production fallback** if residency or cost forces the issue |
+| OpenAI ada-002 (legacy) | 1536 | Similar to -3-small | Inferior to -3-small | Rejected — superseded |
+
+### Decision
+
+| Tier | Purpose | Model |
+|---|---|---|
+| **T1 — Reasoning** | Orchestrator planning, dispute resolution, deep fraud investigation, multi-step agent loops | **GPT-5.4** |
+| **T2 — Low-latency / high-volume** | Failure-explanation Q&A, LLM-as-judge (online), citation summarisation, intent classification | **GPT-5.4-mini** |
+| **T3 — Local fallback** | Degraded-mode RAG when T1/T2 are unavailable (unchanged from ADR-010) | **Flan-T5-large** |
+| **E1 — Embeddings, MVP** | All ingestion and query embedding for hybrid retrieval | **text-embedding-3-small** (1536 d) |
+| **E2 — Embeddings, production target** | Re-index when accuracy headroom matters more than ingestion cost | **text-embedding-3-large** (3072 d) |
+
+The tier router in `services/ai-service/app/llm/router.py` classifies each task by handler-declared `task_class` and dispatches to T1 / T2 / T3 accordingly. The embedder in `services/ai-service/app/retrieval/embedder.py` is dimension-agnostic — only the DB schema knows the dimension.
+
+### Trade-off triangle — explicit
+
+| Choice | Accuracy | Cost | Latency | Rationale for the pick |
+|---|---|---|---|---|
+| GPT-5.4 (T1) | ★★★★★ | ★★ | ★★ | Used sparingly — only when reasoning quality dominates |
+| GPT-5.4-mini (T2) | ★★★ | ★★★★★ | ★★★★★ | Default carrier — 90%+ of traffic, well inside latency budget |
+| Flan-T5-large (T3) | ★★ | ★★★★★ (free) | ★★★ (CPU-bound, ~3–8 s) | Survives a provider outage; demonstrates the "Graceful Degradation" rubric line |
+| text-embedding-3-small (E1) | ★★★★ | ★★★★★ | ★★★★★ | Best $/recall for MVP scale; clears target with headroom |
+| text-embedding-3-large (E2) | ★★★★★ | ★★ | ★★★ | Promote when accuracy headroom dominates cost — not before |
+
+The triangle is read **per row**: every choice is a deliberate point on the accuracy / cost / latency surface, not a "best on everything" pick. The system is the *combination* — T1 + T2 + T3 + E1 — not any single row.
+
+### Consequences
+
+**Positive:**
+- Explicit model pinning closes a hole in ADR-007: panel reviewers asking *"but which exact models?"* now get a single table as the answer.
+- The per-session token-budget cap in the tier router enforces the cost ceiling automatically; an agent that would exceed budget halts and returns "needs human" rather than overspend.
+- E1 clears Recall@5 ≥ 0.85 without paying ~6.5× for the marginal accuracy that E2 delivers. We pay for accuracy *when* it is worth paying.
+- Single-provider coherence simplifies billing, monitoring, and rate-limit observation — one dashboard, not three.
+
+**Negative:**
+- **Embedding-dimension impact:** earlier schema notes assumed `vector(768)` (bge-base). E1 requires **`vector(1536)`**. The `ai.embeddings.embedding` column type and the HNSW index in `infra/postgres/init.sql` need updating. One-line schema change + one index rebuild; ~30 minutes of developer time on Day 1.
+- **Single-vendor risk concentrates** — if OpenAI rate-limits *both* generation and embedding pipelines, degradation hits two places at once. Generation has T3 (Flan-T5); embeddings have no MVP-time fallback (bge-base is documented as the production fallback path, not wired in for the MVP).
+- **Re-indexing cost on E1 → E2 promotion:** 1536 d → 3072 d is a full re-embed, not an incremental migration.
+
+**Mitigations:**
+- Schema fix folds into the existing Day 1 ingestion-worker scaffolding — no new task.
+- `EmbeddingClient` abstraction is dimension-agnostic; the dim is a single config value the indexer reads at startup.
+- Treat the E1 → E2 promotion as a *"background re-embed"* runbook entry, not a hot upgrade.
+
+### Revisit when
+- DeepEval `faithfulness` or `context_precision` falls below threshold **and** root-cause points at embedding quality → promote E1 → E2.
+- OpenAI generation cost exceeds the per-session budget by 2× on a rolling 7-day average → route selected T2 traffic to a self-hosted Llama-class model at the `LLMClient` layer (does not invalidate this ADR — it adds a T2b lane).
+- Data residency becomes a hard requirement → swap routing to Azure OpenAI for the same model family (no model change, just endpoint).
+- OpenAI releases a successor with materially better cost/latency at GPT-5.4-equivalent accuracy → revisit Tier 1/2 picks; record as **ADR-013** to preserve the decision lineage. **Do not edit this ADR in place.**
+
+### Relationship to other ADRs
+- **ADR-007** (Why OpenAI) — foundational. This ADR pins versions and adds the embedding tier; ADR-007's reasoning about *provider* choice is unchanged and remains in force.
+- **ADR-010** (Flan-T5 local fallback) — unchanged. T3 retains its role for generation-side degradation.
+- **`ARCHITECTURE_REVIEW.md` §10 ADR-003** (production embedding model) — that record favours `bge-base-en-v1.5` for self-hostability and residency at scale. This MVP ADR refines for OpenAI-ecosystem coherence and **retains `bge-base` as the named production fallback** if residency or cost forces the issue. Both ADRs co-exist without contradiction.
+
+---
+
+## Closing notes
 
 **What this document is for the panel.**
 The capstone rubric flags *"Ad-hoc technology choice without reasoning"* as a No-verdict and *"ADRs included … clear justification of cost vs. latency vs. complexity"* as the Yes-verdict. Every ADR above names alternatives, lists negatives, and gives a concrete "revisit when" trigger. None of the choices were made because something was "popular" — each is defended on its decision drivers.
