@@ -16,7 +16,7 @@ from typing import AsyncIterator
 
 import structlog
 from fastapi import FastAPI
-
+import app.db.models  # noqa: F401
 from app.db.session import create_engine_and_sessionmaker, dispose_engine
 from app.deps import close_pg_pool, close_redis_client, open_pg_pool, open_redis_client
 from app.health import router as health_router
