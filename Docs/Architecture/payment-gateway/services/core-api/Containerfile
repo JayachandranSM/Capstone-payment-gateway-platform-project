@@ -31,6 +31,7 @@ RUN pip install -r /app/requirements.txt
 COPY shared /app/shared
 COPY services/core-api/main.py /app/main.py
 COPY services/core-api/app /app/app
+COPY scripts /app/scripts
 
 USER app
 
