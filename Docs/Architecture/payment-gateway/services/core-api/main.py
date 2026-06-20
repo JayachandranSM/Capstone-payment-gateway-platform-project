@@ -23,6 +23,10 @@ from app.health import router as health_router
 from app.payment.api import router as payment_router
 from app.settings import get_settings
 from shared.logging_config import setup_logging
+from app.identity.domain.models import User
+from app.wallet.domain.models import Wallet
+from app.payment.domain.models import Transaction
+from app.ledger.domain.models import LedgerEntry
 
 # Configure logging at import time so even module-level errors surface as JSON.
 _settings = get_settings()
