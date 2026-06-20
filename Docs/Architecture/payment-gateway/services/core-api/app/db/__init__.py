@@ -41,3 +41,10 @@ __all__ = [
     "dispose_engine",
     "get_session",
 ]
+
+# Import ORM models so SQLAlchemy relationship strings resolve.
+# These imports are intentionally unused.
+from app.identity.domain.models import User  # noqa: F401
+from app.wallet.domain.models import Wallet  # noqa: F401
+from app.payment.domain.models import Transaction  # noqa: F401
+from app.ledger.domain.models import LedgerEntry  # noqa: F401
