@@ -1,0 +1,32 @@
+# env
+.env
+.env.local
+.env.*.local
+
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# build artefacts
+*.log
+htmlcov/
+-e 
+frontend/vite.config.d.ts
+frontend/vite.config.js

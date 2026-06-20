@@ -1,0 +1,70 @@
+"""core-api/main.py — FastAPI application factory and lifespan.
+
+Boot order:
+
+1. ``setup_logging`` configures structlog + stdlib JSON output BEFORE anything
+   else logs (uvicorn's own startup messages will be JSON too).
+2. ``lifespan`` opens the Postgres pool and Redis client; both are attached
+   to ``app.state``. If either fails the process exits — fail fast at boot.
+3. ``/`` returns a tiny banner so a curl smoke test is meaningful.
+"""
+
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from typing import AsyncIterator
+
+import structlog
+from fastapi import FastAPI
+
+from app.deps import close_pg_pool, close_redis_client, open_pg_pool, open_redis_client
+from app.health import router as health_router
+from app.settings import get_settings
+from shared.logging_config import setup_logging
+
+# Configure logging at import time so even module-level errors surface as JSON.
+_settings = get_settings()
+setup_logging(service_name=_settings.service_name, log_level=_settings.log_level)
+log = structlog.get_logger("main")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Open resources on startup; close them on shutdown."""
+    log.info("startup_begin", port=_settings.port, environment=_settings.environment)
+
+    app.state.pg_pool = await open_pg_pool()
+    app.state.redis = open_redis_client()
+    # Touch Redis once so we fail fast at boot if it's unreachable.
+    await app.state.redis.ping()
+
+    log.info("startup_complete")
+    try:
+        yield
+    finally:
+        log.info("shutdown_begin")
+        await close_pg_pool(app.state.pg_pool)
+        await close_redis_client(app.state.redis)
+        log.info("shutdown_complete")
+
+
+app = FastAPI(
+    title="Payment Gateway — Core API",
+    version="0.1.0",
+    description="Identity, wallet, payment, ledger, fraud, settlement, dispute, merchant.",
+    lifespan=lifespan,
+)
+
+app.include_router(health_router)
+
+
+@app.get("/", tags=["meta"], summary="Service banner")
+async def root() -> dict[str, str]:
+    """Tiny banner so ``curl /`` proves the service is up."""
+    return {
+        "service": _settings.service_name,
+        "version": app.version,
+        "docs": "/docs",
+        "health": "/healthz",
+        "ready": "/readyz",
+    }

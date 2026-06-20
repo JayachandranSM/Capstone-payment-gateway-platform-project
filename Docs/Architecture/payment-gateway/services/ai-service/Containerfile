@@ -1,0 +1,33 @@
+# services/ai-service/Containerfile
+# Build context = repo root; copies shared/ in alongside service code.
+#   podman build -f services/ai-service/Containerfile -t ai-service .
+
+FROM docker.io/library/python:3.12-slim AS runtime
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --shell /bin/bash app
+WORKDIR /app
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
+
+COPY services/ai-service/requirements.txt /app/requirements.txt
+RUN pip install -r /app/requirements.txt
+
+COPY shared /app/shared
+COPY services/ai-service/main.py /app/main.py
+COPY services/ai-service/app /app/app
+
+USER app
+
+EXPOSE 8100
+
+CMD ["python", "-m", "uvicorn", "main:app", \
+     "--host", "0.0.0.0", "--port", "8100", \
+     "--no-access-log", "--proxy-headers"]

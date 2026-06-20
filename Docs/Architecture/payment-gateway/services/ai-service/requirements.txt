@@ -1,0 +1,20 @@
+# Web framework + ASGI server
+fastapi==0.115.5
+uvicorn[standard]==0.32.0
+
+# Settings + validation
+pydantic==2.9.2
+pydantic-settings==2.6.1
+
+# Async DB + cache
+asyncpg==0.30.0
+redis==5.2.0
+
+# Azure OpenAI client (same SDK as openai; AzureOpenAI class)
+openai==1.54.4
+
+# Structured logging
+structlog==24.4.0
+
+# HTTP client used by tooling later
+httpx==0.27.2

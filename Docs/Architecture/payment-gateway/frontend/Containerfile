@@ -1,0 +1,35 @@
+# frontend/Containerfile — multi-stage build.
+# Stage 1: install + build with node.
+# Stage 2: serve static assets through nginx with an API + SSE-safe proxy.
+
+# ---------- build stage -------------------------------------------------------
+FROM docker.io/library/node:20-alpine AS build
+
+WORKDIR /app
+
+# Install deps in a cache-friendly layer.
+COPY package.json package-lock.json* ./
+# package-lock.json is optional on first build; if missing, `npm install` falls back.
+RUN if [ -f package-lock.json ]; then npm ci --no-audit --no-fund; else npm install --no-audit --no-fund; fi
+
+# Build the SPA.
+COPY tsconfig.json tsconfig.node.json vite.config.ts index.html ./
+COPY src ./src
+RUN npm run build
+
+# ---------- serve stage -------------------------------------------------------
+FROM docker.io/library/nginx:1.27-alpine AS runtime
+
+# Replace the default site config with ours (SPA fallback + API proxy).
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Built assets.
+COPY --from=build /app/dist /usr/share/nginx/html
+
+EXPOSE 80
+
+# Health is polled from podman-compose using wget --spider (alpine has wget).
+HEALTHCHECK --interval=10s --timeout=3s --start-period=5s \
+    CMD wget -q --spider http://localhost/ || exit 1
+
+# nginx already runs as non-root in 1.27-alpine (user 'nginx').

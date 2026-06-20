@@ -1,0 +1,146 @@
+# podman-compose.yml — Podman-native (also works with docker compose v2).
+# Quirks worth knowing:
+#   - 'depends_on' with conditions works in podman-compose >= 1.2.
+#   - Healthchecks run *inside* the container, so the check binary must exist
+#     in the image (we use python's urllib for the Python services to avoid
+#     installing curl).
+#   - Service names are also DNS names on the user-defined network 'pg-net'.
+
+version: "3.9"
+
+networks:
+  pg-net:
+    driver: bridge
+
+volumes:
+  pg-data:
+  redis-data:
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL 16 with the pgvector extension (built-in via the official image)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: docker.io/pgvector/pgvector:pg16
+    container_name: pg-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-paymentgateway}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-paymentgateway}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    networks:
+      - pg-net
+
+  # ---------------------------------------------------------------------------
+  # Redis 7 — used for idempotency, sessions, velocity counters, event streams
+  # ---------------------------------------------------------------------------
+  redis:
+    image: docker.io/library/redis:7-alpine
+    container_name: pg-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - pg-net
+
+  # ---------------------------------------------------------------------------
+  # core-api — FastAPI; identity, payments, ledger, fraud, settlement, disputes
+  # (bootstrap stage: only health + DB/Redis wiring; business modules to come)
+  # ---------------------------------------------------------------------------
+  core-api:
+    build:
+      context: .
+      dockerfile: services/core-api/Containerfile
+    container_name: pg-core-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SERVICE_NAME: core-api
+    ports:
+      - "${CORE_API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz',timeout=2).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - pg-net
+
+  # ---------------------------------------------------------------------------
+  # ai-service — FastAPI; RAG, agents (LangGraph), evaluation, Azure OpenAI
+  # ---------------------------------------------------------------------------
+  ai-service:
+    build:
+      context: .
+      dockerfile: services/ai-service/Containerfile
+    container_name: pg-ai-service
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      SERVICE_NAME: ai-service
+    ports:
+      - "${AI_SERVICE_PORT:-8100}:8100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8100/healthz',timeout=2).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - pg-net
+
+  # ---------------------------------------------------------------------------
+  # frontend — React 18 + TS + Vite, served by nginx with SSE-safe API proxy
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Containerfile
+    container_name: pg-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      core-api:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - pg-net
