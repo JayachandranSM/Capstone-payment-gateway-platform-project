@@ -203,7 +203,9 @@ ON CONFLICT (chunk_id) DO UPDATE SET
     embedding       = EXCLUDED.embedding,
     content_hash    = EXCLUDED.content_hash,
     ingested_at     = now()
-WHERE ai.knowledge_chunks.content_hash != EXCLUDED.content_hash
+WHERE ai.knowledge_chunks.content_hash  != EXCLUDED.content_hash
+   OR ai.knowledge_chunks.embedding      IS NULL
+   OR ai.knowledge_chunks.embedding     IS DISTINCT FROM EXCLUDED.embedding
 """
 
 # Upsert without embedding (keyword-only mode)

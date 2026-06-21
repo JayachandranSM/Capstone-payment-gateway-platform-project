@@ -7,7 +7,7 @@ Two retrieval modes
     When Azure OpenAI is configured, the query is embedded with
     ``text-embedding-3-small`` (1536 dimensions). The embedding is sent
     to Postgres as a raw float list cast to ``::vector`` and compared
-    via cosine distance (``<#>`` operator) against pre-computed chunk
+    via cosine distance (``<=>`` operator) against pre-computed chunk
     embeddings stored in ``ai.knowledge_chunks``. The distance is
     converted to similarity: ``similarity = 1 − cosine_distance``.
 
@@ -166,12 +166,13 @@ class RAGService:
     ) -> list[KnowledgeChunk]:
         """Retrieve chunks by cosine similarity using pgvector.
 
-        The ``<#>`` operator returns the *negative* inner product which,
-        for unit-normalised vectors (as produced by text-embedding-3-small),
-        equals cosine distance. We convert to similarity: 1 − distance.
+        Uses the ``<=>`` cosine distance operator (pgvector). For
+        unit-normalised vectors (as produced by text-embedding-3-small),
+        cosine_distance = 1 − cosine_similarity, so:
+            similarity = 1 − (embedding <=> query_vec) ∈ [0, 1]
 
-        We pass the vector as a Python list; asyncpg will serialise it,
-        and the ``::vector`` cast in the query tells pgvector the type.
+        We pass the query vector as a Python string literal and cast it
+        to ``::vector`` in SQL; asyncpg sends it as TEXT, Postgres casts.
         """
         # Build a stringified vector literal for the cast.
         vec_literal = "[" + ",".join(str(f) for f in embedding) + "]"
@@ -184,7 +185,7 @@ class RAGService:
                 section_title,
                 content,
                 keywords,
-                1 - (embedding <#> $1::vector) AS similarity
+                1 - (embedding <=> $1::vector) AS similarity
             FROM ai.knowledge_chunks
             WHERE embedding IS NOT NULL
         """
@@ -197,11 +198,11 @@ class RAGService:
             param_idx += 1
 
         if req.min_score > 0.0:
-            base_sql += f" AND 1 - (embedding <#> $1::vector) >= ${param_idx}"
+            base_sql += f" AND 1 - (embedding <=> $1::vector) >= ${param_idx}"
             params.append(req.min_score)
             param_idx += 1
 
-        base_sql += f" ORDER BY embedding <#> $1::vector LIMIT ${param_idx}"
+        base_sql += f" ORDER BY embedding <=> $1::vector LIMIT ${param_idx}"
         params.append(req.top_k)
 
         async with self._pool.acquire() as conn:
