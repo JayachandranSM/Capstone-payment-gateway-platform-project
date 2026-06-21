@@ -23,6 +23,8 @@ RUN pip install -r /app/requirements.txt
 COPY shared /app/shared
 COPY services/ai-service/main.py /app/main.py
 COPY services/ai-service/app /app/app
+COPY scripts /app/scripts
+COPY docs/knowledge /app/docs/knowledge
 
 USER app
 
