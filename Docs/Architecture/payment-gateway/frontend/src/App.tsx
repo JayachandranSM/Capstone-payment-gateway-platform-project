@@ -1,134 +1,125 @@
-// src/App.tsx — bootstrap status dashboard.
-// Polls /healthz and /readyz on both backends and renders a status grid.
-// Intentionally tiny — the real consoles (UserConsole, MerchantDashboard,
-// SupportConsole) replace this on the frontend day.
+// App.tsx — AI-Powered Payment Gateway Dashboard
+import { useState } from 'react';
+import { SummaryCards }    from './components/SummaryCards';
+import { PaymentsTable }   from './components/PaymentsTable';
+import { DetailPanel }     from './components/DetailPanel';
+import { RAGPanel }        from './components/RAGPanel';
+import { usePayments }     from './hooks/usePayments';
+import type { Transaction, TxnStatus } from './types';
 
-import { useCallback, useEffect, useState } from 'react';
-import { api, type ReadinessResponse } from './api/health';
-
-type ServiceStatus = {
-  name: string;
-  alive: boolean;
-  ready: boolean;
-  checks: Record<string, string>;
-  llmAvailable?: boolean;
-  lastError?: string;
-};
-
-const initial = (name: string): ServiceStatus => ({
-  name,
-  alive: false,
-  ready: false,
-  checks: {},
-});
+type View = 'payments' | 'assistant';
 
 export default function App() {
-  const [core, setCore] = useState<ServiceStatus>(initial('core-api'));
-  const [ai, setAi] = useState<ServiceStatus>(initial('ai-service'));
-  const [refreshAt, setRefreshAt] = useState<Date | null>(null);
+  const [view,     setView]     = useState<View>('payments');
+  const [selected, setSelected] = useState<Transaction | null>(null);
+  const [filter,   setFilter]   = useState<TxnStatus | ''>('');
 
-  const probe = useCallback(async () => {
-    // core-api
-    try {
-      await api.coreHealth();
-      const r = await api.coreReady();
-      setCore({
-        name: 'core-api',
-        alive: true,
-        ready: r.status === 'ready',
-        checks: r.checks,
-      });
-    } catch (e) {
-      setCore((s) => ({ ...s, alive: false, ready: false, lastError: String(e) }));
-    }
-
-    // ai-service
-    try {
-      await api.aiHealth();
-      const r: ReadinessResponse = await api.aiReady();
-      setAi({
-        name: 'ai-service',
-        alive: true,
-        ready: r.status === 'ready',
-        checks: r.checks,
-        llmAvailable: r.llm_available,
-      });
-    } catch (e) {
-      setAi((s) => ({ ...s, alive: false, ready: false, lastError: String(e) }));
-    }
-
-    setRefreshAt(new Date());
-  }, []);
-
-  useEffect(() => {
-    probe();
-    const id = window.setInterval(probe, 5000);
-    return () => window.clearInterval(id);
-  }, [probe]);
+  const {
+    transactions,
+    loading,
+    error,
+    nextCursor,
+    refresh,
+    fetchNext,
+  } = usePayments({ limit: 25, status: filter, autoRefreshMs: 30_000 });
 
   return (
-    <main className="page">
-      <header className="page__header">
-        <h1>Payment Gateway — Platform Status</h1>
-        <p className="muted">
-          Bootstrap dashboard. Polls every 5 s. Real consoles replace this view in
-          a later turn.
-        </p>
-      </header>
+    <div className="app">
+      {/* Sidebar */}
+      <nav className="sidebar" aria-label="Main navigation">
+        <div className="sidebar__brand">
+          <span className="sidebar__logo" aria-hidden="true">⬡</span>
+          <span className="sidebar__name">PayGateway</span>
+        </div>
 
-      <section className="grid">
-        <ServiceCard s={core} />
-        <ServiceCard s={ai} />
-      </section>
-
-      <footer className="page__footer">
-        <button onClick={probe} type="button" className="btn">
-          Refresh now
-        </button>
-        {refreshAt && (
-          <span className="muted">Last refreshed {refreshAt.toLocaleTimeString()}</span>
-        )}
-      </footer>
-    </main>
-  );
-}
-
-function ServiceCard({ s }: { s: ServiceStatus }) {
-  const overall =
-    !s.alive ? 'down' : s.ready ? 'ready' : 'degraded';
-
-  return (
-    <article className={`card card--${overall}`}>
-      <header className="card__head">
-        <h2>{s.name}</h2>
-        <StatusPill status={overall} />
-      </header>
-
-      {s.checks && Object.keys(s.checks).length > 0 && (
-        <ul className="checks">
-          {Object.entries(s.checks).map(([dep, status]) => (
-            <li key={dep}>
-              <span className="checks__dep">{dep}</span>
-              <span className={`checks__val ${status === 'ok' ? 'ok' : 'bad'}`}>
-                {status}
-              </span>
-            </li>
-          ))}
+        <ul className="nav-list">
+          <li>
+            <button
+              type="button"
+              className={`nav-item ${view === 'payments' ? 'nav-item--active' : ''}`}
+              onClick={() => setView('payments')}
+            >
+              <span className="nav-item__icon">◫</span>
+              Payments
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              className={`nav-item ${view === 'assistant' ? 'nav-item--active' : ''}`}
+              onClick={() => setView('assistant')}
+            >
+              <span className="nav-item__icon">◎</span>
+              Policy Assistant
+            </button>
+          </li>
         </ul>
-      )}
 
-      {s.llmAvailable === false && s.checks?.azure_openai && (
-        <p className="banner">
-          ⚠ Azure OpenAI {s.checks.azure_openai}. The ai-service is operating in
-          degraded mode — see DECISIONS.md ADR-012.
-        </p>
-      )}
+        <div className="sidebar__footer">
+          <button
+            type="button"
+            className="btn btn--ghost btn--sm"
+            onClick={refresh}
+            title="Refresh payments"
+          >
+            ↺ Refresh
+          </button>
+        </div>
+      </nav>
 
-      {s.lastError && <p className="error">{s.lastError}</p>}
-    </article>
+      {/* Main content */}
+      <div className="main-content">
+        <header className="top-bar">
+          <div className="top-bar__left">
+            <h1 className="top-bar__title">
+              {view === 'payments' ? 'Transaction Monitor' : 'Policy Knowledge Base'}
+            </h1>
+          </div>
+          <div className="top-bar__right">
+            {view === 'payments' && (
+              <select
+                className="filter-select"
+                value={filter}
+                onChange={e => { setFilter(e.target.value as TxnStatus | ''); setSelected(null); }}
+                aria-label="Filter by status"
+              >
+                <option value="">All statuses</option>
+                <option value="success">Success</option>
+                <option value="failed">Failed</option>
+                <option value="flagged">Flagged</option>
+                <option value="pending">Pending</option>
+                <option value="reversed">Reversed</option>
+              </select>
+            )}
+          </div>
+        </header>
+
+        <div className="content-area">
+          {view === 'payments' && (
+            <>
+              <SummaryCards transactions={transactions} loading={loading} />
+              <PaymentsTable
+                transactions={transactions}
+                loading={loading}
+                error={error}
+                onSelect={setSelected}
+                selectedId={selected?.transaction_id ?? null}
+                onRetry={refresh}
+                hasMore={!!nextCursor}
+                onLoadMore={fetchNext}
+              />
+            </>
+          )}
+
+          {view === 'assistant' && <RAGPanel />}
+        </div>
+      </div>
+
+      {/* Slide-in detail panel */}
+      <DetailPanel
+        transaction={selected}
+        onClose={() => setSelected(null)}
+      />
+    </div>
   );
-}
-
-function StatusPill({ status }: { status: 'ready' | 'degraded' | 'down' }) {
-  return <span className={`pill pill--${status}`}>{status.toUpperCase()}</span>;
 }

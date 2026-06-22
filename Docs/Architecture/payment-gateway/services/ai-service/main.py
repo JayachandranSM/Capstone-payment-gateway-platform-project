@@ -21,6 +21,8 @@ from app.deps import (
     open_pg_pool,
     open_redis_client,
 )
+from app.fraud.routes import router as fraud_router
+from app.rag.routes import router as rag_router
 from app.health import router as health_router
 from app.settings import get_settings
 from shared.logging_config import setup_logging
@@ -61,6 +63,8 @@ app = FastAPI(
 )
 
 app.include_router(health_router)
+app.include_router(fraud_router)
+app.include_router(rag_router)
 
 
 @app.get("/", tags=["meta"], summary="Service banner")
