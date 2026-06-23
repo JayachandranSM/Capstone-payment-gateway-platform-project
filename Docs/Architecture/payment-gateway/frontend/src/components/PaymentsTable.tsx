@@ -1,8 +1,6 @@
 // components/PaymentsTable.tsx
-// The signature design element: a left-border "risk spine" that encodes fraud
-// risk at a glance. Each row's left border is cyan (allow/no score), amber
-// (review / flagged), or red (rejected / failed). Reviewers can scan 100 rows
-// in seconds by pattern-matching the spine colours.
+// Risk spine: left border encodes fraud risk at a glance.
+// Each row also has an explicit "View details" chevron button on the right.
 import { useState } from 'react';
 import type { Transaction, TxnStatus } from '../types';
 import { StatusBadge } from './StatusBadge';
@@ -40,7 +38,7 @@ function fmtDate(iso: string) {
   });
 }
 
-function truncate(s: string | null, len = 8) {
+function truncate(s: string | null, len = 12) {
   if (!s) return '—';
   return s.length > len ? `${s.slice(0, len)}…` : s;
 }
@@ -57,6 +55,15 @@ interface Props {
 }
 
 const STATUS_FILTERS: Array<TxnStatus | ''> = ['', 'success', 'failed', 'flagged', 'pending', 'reversed'];
+
+// Chevron icon for "View details"
+function ChevronRight() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">
+      <path d="M5 3l4 4-4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
 
 export function PaymentsTable({
   transactions,
@@ -106,12 +113,13 @@ export function PaymentsTable({
               <th>Status</th>
               <th>Fraud</th>
               <th>Date</th>
+              <th className="col-action" aria-label="Actions" />
             </tr>
           </thead>
           <tbody>
             {filtered.length === 0 && !loading && (
               <tr>
-                <td colSpan={8} className="table-empty">
+                <td colSpan={9} className="table-empty">
                   No transactions found.
                 </td>
               </tr>
@@ -134,7 +142,7 @@ export function PaymentsTable({
                 <td className="col-amount-val">
                   {fmtAmount(t.amount, t.currency)}
                 </td>
-                <td>{t.payment_method}</td>
+                <td className="col-method">{t.payment_method}</td>
                 <td><StatusBadge value={t.status} /></td>
                 <td>
                   {t.fraud_score
@@ -142,11 +150,22 @@ export function PaymentsTable({
                     : <span className="muted">—</span>}
                 </td>
                 <td className="col-date">{fmtDate(t.created_at)}</td>
+                <td className="col-action">
+                  <button
+                    type="button"
+                    className="view-details-btn"
+                    onClick={e => { e.stopPropagation(); onSelect(t); }}
+                    aria-label={`View details for transaction ${t.transaction_id}`}
+                    title="View details"
+                  >
+                    <ChevronRight />
+                  </button>
+                </td>
               </tr>
             ))}
             {loading && (
               <tr>
-                <td colSpan={8} className="table-loading">
+                <td colSpan={9} className="table-loading">
                   <Spinner size="sm" /> Loading…
                 </td>
               </tr>

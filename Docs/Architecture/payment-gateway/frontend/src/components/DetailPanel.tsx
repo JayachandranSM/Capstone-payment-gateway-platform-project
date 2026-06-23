@@ -1,4 +1,4 @@
-// components/DetailPanel.tsx — slide-in drawer: transaction fields + fraud scoring.
+// components/DetailPanel.tsx — premium slide-in drawer: transaction fields + fraud scoring.
 import { useEffect, useRef, useState } from 'react';
 import type { FraudScoreResponse, RuleCategory, RuleHit, Transaction } from '../types';
 import { aiApi } from '../api/client';
@@ -6,8 +6,6 @@ import { useAsync } from '../hooks/useAsync';
 import { ErrorBanner } from './ErrorBanner';
 import { Spinner } from './Spinner';
 import { StatusBadge } from './StatusBadge';
-
-// ── Helpers ──────────────────────────────────────────────────────────────────
 
 interface Props {
   transaction: Transaction | null;
@@ -59,15 +57,11 @@ const CATEGORY_CLASS: Record<RuleCategory, string> = {
 };
 
 // ── Animated score meter ──────────────────────────────────────────────────────
-// Mounts at 0 width, then transitions to target on the next frame.
-// This ensures the CSS transition actually plays even when the component
-// mounts with its final value already set.
 
 function ScoreMeter({ score, color }: { score: number; color: string }) {
   const [width, setWidth] = useState(0);
 
   useEffect(() => {
-    // Two-frame delay: first frame mounts at 0, second frame animates to target.
     const raf = requestAnimationFrame(() => {
       requestAnimationFrame(() => setWidth(score));
     });
@@ -151,8 +145,7 @@ function FraudResult({ result }: { result: FraudScoreResponse }) {
 
   return (
     <div className="fraud-result">
-
-      {/* Score + decision row */}
+      {/* Score + decision */}
       <div className="fraud-result__top">
         <div className="fraud-result__score-block">
           <div className="fraud-result__score-row">
@@ -167,10 +160,14 @@ function FraudResult({ result }: { result: FraudScoreResponse }) {
 
       {/* LLM explanation */}
       {result.explanation && (
-        <p className="fraud-explanation">{result.explanation}</p>
+        <div className="fraud-explanation-block">
+          <p className="fraud-explanation-block__label">AI Analysis</p>
+          <p className="fraud-explanation">{result.explanation}</p>
+          {result.llm_used && <span className="fraud-result__llm-tag">LLM ✓</span>}
+        </div>
       )}
 
-      {/* Flat reasons list — when there are reasons but no rule_hits detail */}
+      {/* Flat reasons — when no rule_hits detail */}
       {result.reasons.length > 0 && result.rule_hits.length === 0 && (
         <ul className="fraud-reasons">
           {result.reasons.map((r, i) => (
@@ -179,7 +176,7 @@ function FraudResult({ result }: { result: FraudScoreResponse }) {
         </ul>
       )}
 
-      {/* Rule hits with category badges + collapsible evidence */}
+      {/* Rule hits */}
       {result.rule_hits.length > 0 && (
         <div className="rule-hits">
           <p className="rule-hits__title">
@@ -191,23 +188,16 @@ function FraudResult({ result }: { result: FraudScoreResponse }) {
         </div>
       )}
 
-      {/* Footer meta */}
+      {/* Footer */}
       <div className="fraud-result__footer">
-        <span className="fraud-result__meta muted">
-          {result.model_version}
-          {result.llm_used && (
-            <span className="fraud-result__llm-tag"> · LLM ✓</span>
-          )}
-        </span>
-        <span className="fraud-result__meta muted">
-          Scored {fmtTime(result.scored_at)}
-        </span>
+        <span className="fraud-result__meta muted">{result.model_version}</span>
+        <span className="fraud-result__meta muted">Scored {fmtTime(result.scored_at)}</span>
       </div>
     </div>
   );
 }
 
-// ── Skeleton shown while the API call is in-flight ────────────────────────────
+// ── Skeleton ──────────────────────────────────────────────────────────────────
 
 function FraudSkeleton() {
   return (
@@ -227,18 +217,26 @@ function FraudSkeleton() {
   );
 }
 
+// ── Section divider ───────────────────────────────────────────────────────────
+
+function SectionDivider({ label }: { label: string }) {
+  return (
+    <div className="detail-section-divider">
+      <span className="detail-section-divider__label">{label}</span>
+    </div>
+  );
+}
+
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export function DetailPanel({ transaction: txn, onClose }: Props) {
   const { state: fraudState, run: runFraud, reset: resetFraud } = useAsync<FraudScoreResponse>();
   const scoreButtonRef = useRef<HTMLButtonElement>(null);
 
-  // Reset fraud state when the selected transaction changes.
   useEffect(() => {
     resetFraud();
   }, [txn?.transaction_id, resetFraud]);
 
-  // Close on Escape key.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', handler);
@@ -279,67 +277,91 @@ export function DetailPanel({ transaction: txn, onClose }: Props) {
         aria-label="Transaction detail"
         role="complementary"
       >
-        <div className="detail-panel__header">
-          <h2 className="detail-panel__title">Transaction Detail</h2>
+        {/* Premium header with amount hero */}
+        <div className="detail-panel__header detail-panel__header--premium">
+          <div className="detail-panel__header-main">
+            {txn ? (
+              <>
+                <div className="detail-panel__hero-amount">
+                  {fmtMoney(txn.amount, txn.currency)}
+                </div>
+                <div className="detail-panel__hero-meta">
+                  <StatusBadge value={txn.status} />
+                  <span className="detail-panel__hero-method">{txn.payment_method}</span>
+                  {txn.merchant_id && (
+                    <span className="detail-panel__hero-merchant">{txn.merchant_id}</span>
+                  )}
+                </div>
+              </>
+            ) : (
+              <h2 className="detail-panel__title">Transaction Detail</h2>
+            )}
+          </div>
           <button
             type="button"
             className="panel-close"
             onClick={onClose}
             aria-label="Close detail panel"
           >
-            ×
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+              <path d="M4 4l10 10M14 4L4 14" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+            </svg>
           </button>
         </div>
 
         {txn && (
           <div className="detail-panel__body">
 
-            {/* ── Core transaction fields ── */}
+            {/* ── Transaction fields ── */}
+            <SectionDivider label="Transaction" />
             <dl className="detail-list">
               <Row label="ID">
                 <code className="mono">{txn.transaction_id}</code>
               </Row>
-              <Row label="Amount">
-                <strong>{fmtMoney(txn.amount, txn.currency)}</strong>
-                <span className="muted"> {txn.currency}</span>
-              </Row>
               <Row label="Status">
                 <StatusBadge value={txn.status} />
-              </Row>
-              <Row label="Method">{txn.payment_method}</Row>
-              <Row label="Merchant">{txn.merchant_id ?? '—'}</Row>
-              <Row label="User">
-                <code className="mono sm">{txn.user_id ?? '—'}</code>
+                {txn.failure_reason && (
+                  <span className="detail-failure-reason">{txn.failure_reason}</span>
+                )}
               </Row>
               <Row label="Settlement">
                 <StatusBadge value={txn.settlement_status} />
+                {txn.chargeback_flag && (
+                  <span className="badge badge--red" style={{ marginLeft: '0.35rem' }}>Chargeback</span>
+                )}
               </Row>
-              {txn.failure_reason && (
-                <Row label="Failure">{txn.failure_reason}</Row>
+              {txn.parent_transaction && (
+                <Row label="Refund of">
+                  <code className="mono sm">{txn.parent_transaction}</code>
+                </Row>
               )}
               {txn.fraud_score && (
                 <Row label="Stored fraud score">
                   <span className="fraud-score">
                     {(parseFloat(txn.fraud_score) * 100).toFixed(1)}
                   </span>
-                  /100
+                  <span className="muted">/100</span>
                 </Row>
               )}
-              {txn.parent_transaction && (
-                <Row label="Refund of">
-                  <code className="mono sm">{txn.parent_transaction}</code>
-                </Row>
-              )}
+            </dl>
+
+            {/* ── Parties ── */}
+            <SectionDivider label="Parties" />
+            <dl className="detail-list">
+              <Row label="User">
+                <code className="mono sm">{txn.user_id ?? '—'}</code>
+              </Row>
+              <Row label="Merchant">{txn.merchant_id ?? '—'}</Row>
+            </dl>
+
+            {/* ── Timestamps ── */}
+            <SectionDivider label="Timeline" />
+            <dl className="detail-list">
               <Row label="Created">{fmtFull(txn.created_at)}</Row>
               <Row label="Updated">{fmtFull(txn.updated_at)}</Row>
               {txn.idempotency_key && (
                 <Row label="Idempotency key">
                   <code className="mono sm">{txn.idempotency_key}</code>
-                </Row>
-              )}
-              {txn.chargeback_flag && (
-                <Row label="Chargeback">
-                  <span className="badge badge--red">Yes</span>
                 </Row>
               )}
             </dl>
@@ -375,22 +397,18 @@ export function DetailPanel({ transaction: txn, onClose }: Props) {
                 </button>
               </div>
 
-              {/* Idle hint */}
               {fraudState.status === 'idle' && (
                 <p className="fraud-panel__hint muted">
                   Click "Score now" to run real-time fraud analysis via the AI service.
                 </p>
               )}
 
-              {/* In-flight skeleton */}
               {isLoading && <FraudSkeleton />}
 
-              {/* Error */}
               {fraudState.status === 'error' && (
                 <ErrorBanner message={fraudState.message} onRetry={scoreFraud} />
               )}
 
-              {/* Result */}
               {fraudState.status === 'success' && (
                 <FraudResult result={fraudState.data} />
               )}
